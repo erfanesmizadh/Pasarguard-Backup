@@ -1,6 +1,6 @@
 #!/bin/bash
-# Pasarguard Ultimate Backup Installer - Final Smart Version
-# by @AVASH_NET
+# Pasarguard Ultimate Backup Installer - Final Version
+# by @AVASH_NET (Full Smart Version)
 
 # ───────────── Dependencies ─────────────
 if ! command -v whiptail &> /dev/null; then
@@ -68,6 +68,11 @@ ZIP_FILE="/root/pasarguard-backup-$DATE.zip"
 
 echo "[$(date)] Starting backup..." >> "$LOG_FILE"
 
+# Delete old backups
+echo "[$(date)] Cleaning old backups..." >> "$LOG_FILE"
+rm -f /root/pasarguard-backup-*.zip
+rm -f "$BACKUP_DIR"/*.sql
+
 # Detect MySQL container
 MYSQL_CONTAINER=$(docker ps --format "{{.Names}}" | grep -i mysql | head -n1)
 if [ -z "$MYSQL_CONTAINER" ]; then
@@ -113,6 +118,7 @@ curl -s -X POST "https://api.telegram.org/bot$BOT_TOKEN/sendDocument" \
 -F caption="📦 Pasarguard + PG-Node Backup - $DATE" \
 -F document=@"$ZIP_FILE" >> "$LOG_FILE"
 
+# Clean local backup files
 rm -f "$SQL_FILE" "$ZIP_FILE"
 
 echo "[$(date)] Backup completed." >> "$LOG_FILE"
