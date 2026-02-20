@@ -29,5 +29,5 @@
 ## 🔹 نحوه استفاده
 
 1. ابتدا اسکریپت را دانلود یا کلون کنید:
-
+```
 bash -c "$(curl -sL https://raw.githubusercontent.com/erfanesmizadh/Pasarguard-Backup/main/install.sh)"
