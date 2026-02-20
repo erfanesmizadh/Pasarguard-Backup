@@ -1,6 +1,6 @@
 #!/bin/bash
-# Pasarguard Ultimate Backup Installer - Final Version
-# by @AVASH_NET (Full Smart Version)
+# Pasarguard Ultimate Backup Installer - Final Smart Version
+# by @AVASH_NET
 
 # ───────────── Dependencies ─────────────
 if ! command -v whiptail &> /dev/null; then
@@ -31,26 +31,13 @@ INTERVAL=$(whiptail --menu "Select Backup Interval (Every X Hours)" 20 60 10 \
 "24" "Every 24 Hours" \
 3>&1 1>&2 2>&3)
 
-# ───────────── Detect Existing Folders ─────────────
-declare -A POSSIBLE_PATHS=(
-["Database Backup"]="/var/lib/pasarguard/db-backup"
-["Certificates"]="/var/lib/pasarguard/certs"
-["Templates"]="/var/lib/pasarguard/templates"
-["Docker Compose"]="/opt/pasarguard/docker-compose.yml"
-["Environment File"]="/opt/pasarguard/.env"
+# ───────────── Paths to Backup ─────────────
+BACKUP_PATHS=(
+"/opt/pasarguard"
+"/opt/pg-node"
+"/var/lib/pasarguard"
+"/var/lib/pg-node"
 )
-
-EXISTING_PATHS=()
-for key in "${!POSSIBLE_PATHS[@]}"; do
-    if [ -e "${POSSIBLE_PATHS[$key]}" ]; then
-        EXISTING_PATHS+=("${POSSIBLE_PATHS[$key]} $key ON")
-    fi
-done
-
-# ───────────── Folder Multi Select ─────────────
-FOLDER_SELECTION=$(whiptail --checklist "Select Folders to Backup (SPACE to select)" 20 80 10 \
-"${EXISTING_PATHS[@]}" 3>&1 1>&2 2>&3)
-BACKUP_PATHS=$(echo $FOLDER_SELECTION | tr -d '"')
 
 # ───────────── Save Config ─────────────
 CONFIG_FILE="/opt/pasarguard/backup-config.env"
@@ -65,7 +52,7 @@ CHAT_ID="$CHAT_ID"
 DB_USER="$DB_USER"
 DB_PASS="$DB_PASS"
 INTERVAL="$INTERVAL"
-BACKUP_PATHS="$BACKUP_PATHS"
+BACKUP_PATHS="${BACKUP_PATHS[*]}"
 BACKUP_DIR="/var/lib/pasarguard/db-backup"
 EOF
 
@@ -81,6 +68,7 @@ ZIP_FILE="/root/pasarguard-backup-$DATE.zip"
 
 echo "[$(date)] Starting backup..." >> "$LOG_FILE"
 
+# Detect MySQL container
 MYSQL_CONTAINER=$(docker ps --format "{{.Names}}" | grep -i mysql | head -n1)
 if [ -z "$MYSQL_CONTAINER" ]; then
     echo "[$(date)] ERROR: MySQL container not found!" >> "$LOG_FILE"
@@ -102,33 +90,27 @@ fi
 
 FILES_TO_ZIP=("$SQL_FILE")
 
-# Add selected paths
+# Add backup paths
 for path in $BACKUP_PATHS; do
-    # Direct path exists
     if [ -e "$path" ]; then
         FILES_TO_ZIP+=("$path")
-        continue
-    fi
-    # Check /var/lib alternative
-    ALT_PATH=$(echo "$path" | sed 's|/opt/pasarguard|/var/lib/pasarguard|')
-    if [ -e "$ALT_PATH" ]; then
-        FILES_TO_ZIP+=("$ALT_PATH")
-        echo "[$(date)] INFO: Using alternative path $ALT_PATH" >> "$LOG_FILE"
+        echo "[$(date)] INFO: Adding $path to backup" >> "$LOG_FILE"
     else
-        echo "[$(date)] WARNING: $path not found" >> "$LOG_FILE"
+        echo "[$(date)] WARNING: $path not found!" >> "$LOG_FILE"
     fi
 done
 
+# Create zip
 zip -r "$ZIP_FILE" "${FILES_TO_ZIP[@]}" >> "$LOG_FILE" 2>&1
 if [ ! -f "$ZIP_FILE" ]; then
-    echo "[$(date)] ERROR: Zip failed!" >> "$LOG_FILE"
+    echo "[$(date)] ERROR: Zip creation failed!" >> "$LOG_FILE"
     exit 1
 fi
 
 # Send to Telegram
 curl -s -X POST "https://api.telegram.org/bot$BOT_TOKEN/sendDocument" \
 -F chat_id="$CHAT_ID" \
--F caption="📦 Pasarguard Backup - $DATE" \
+-F caption="📦 Pasarguard + PG-Node Backup - $DATE" \
 -F document=@"$ZIP_FILE" >> "$LOG_FILE"
 
 rm -f "$SQL_FILE" "$ZIP_FILE"
