@@ -1,10 +1,10 @@
 #!/bin/bash
-# Pasarguard Ultimate Backup - FINAL Stable Version
-# by @AVASH_NET
+# Pasarguard Ultimate Backup Installer - Final Version
+# by @AVASH_NET (Full Smart Version)
 
-# ───────────── Install whiptail if missing ─────────────
+# ───────────── Dependencies ─────────────
 if ! command -v whiptail &> /dev/null; then
-    apt update -y && apt install -y whiptail
+    apt update -y && apt install -y whiptail zip curl docker.io
 fi
 
 clear
@@ -13,17 +13,13 @@ echo "      🔹 Pasarguard Backup Installer 🔹"
 echo "==============================================="
 
 # ───────────── Basic Inputs ─────────────
-DB_DISPLAY=$(whiptail --inputbox "Database name (EXACT name, e.g. pasarguard)\nLeave empty for ALL databases:" 10 70 "pasarguard" --title "Database Name" 3>&1 1>&2 2>&3)
-
+DB_DISPLAY=$(whiptail --inputbox "Database name (leave empty for ALL databases):" 8 60 "pasarguard" --title "Database Name" 3>&1 1>&2 2>&3)
 BOT_TOKEN=$(whiptail --inputbox "Enter Telegram Bot Token:" 8 60 --title "Telegram Bot Token" 3>&1 1>&2 2>&3)
-
 CHAT_ID=$(whiptail --inputbox "Enter Admin Telegram ID:" 8 60 --title "Telegram Chat ID" 3>&1 1>&2 2>&3)
-
 DB_USER=$(whiptail --inputbox "Database Root User:" 8 60 "root" --title "DB User" 3>&1 1>&2 2>&3)
-
 DB_PASS=$(whiptail --passwordbox "Database Root Password:" 8 60 --title "DB Password" 3>&1 1>&2 2>&3)
 
-# ───────────── Interval ─────────────
+# ───────────── Interval Selection ─────────────
 INTERVAL=$(whiptail --menu "Select Backup Interval (Every X Hours)" 20 60 10 \
 "1"  "Every 1 Hour" \
 "2"  "Every 2 Hours" \
@@ -35,16 +31,26 @@ INTERVAL=$(whiptail --menu "Select Backup Interval (Every X Hours)" 20 60 10 \
 "24" "Every 24 Hours" \
 3>&1 1>&2 2>&3)
 
-# ───────────── Folder Selection ─────────────
-FOLDER_SELECTION=$(whiptail --checklist "Select Pasarguard Files/Folders" 20 80 10 \
-"/opt/pasarguard/certs" "Certificates" ON \
-"/opt/pasarguard/templates" "Templates" ON \
-"/opt/pasarguard/docker-compose.yml" "Docker Compose File" ON \
-"/opt/pasarguard/.env" "Environment File" ON \
-3>&1 1>&2 2>&3)
+# ───────────── Detect Existing Folders ─────────────
+declare -A POSSIBLE_PATHS=(
+["Database Backup"]="/var/lib/pasarguard/db-backup"
+["Certificates"]="/var/lib/pasarguard/certs"
+["Templates"]="/var/lib/pasarguard/templates"
+["Docker Compose"]="/opt/pasarguard/docker-compose.yml"
+["Environment File"]="/opt/pasarguard/.env"
+)
 
-# Convert to newline list
-BACKUP_PATHS=$(echo "$FOLDER_SELECTION" | tr -d '"' | tr ' ' '\n')
+EXISTING_PATHS=()
+for key in "${!POSSIBLE_PATHS[@]}"; do
+    if [ -e "${POSSIBLE_PATHS[$key]}" ]; then
+        EXISTING_PATHS+=("${POSSIBLE_PATHS[$key]} $key ON")
+    fi
+done
+
+# ───────────── Folder Multi Select ─────────────
+FOLDER_SELECTION=$(whiptail --checklist "Select Folders to Backup (SPACE to select)" 20 80 10 \
+"${EXISTING_PATHS[@]}" 3>&1 1>&2 2>&3)
+BACKUP_PATHS=$(echo $FOLDER_SELECTION | tr -d '"')
 
 # ───────────── Save Config ─────────────
 CONFIG_FILE="/opt/pasarguard/backup-config.env"
@@ -59,14 +65,13 @@ CHAT_ID="$CHAT_ID"
 DB_USER="$DB_USER"
 DB_PASS="$DB_PASS"
 INTERVAL="$INTERVAL"
-BACKUP_PATHS='$BACKUP_PATHS'
+BACKUP_PATHS="$BACKUP_PATHS"
 BACKUP_DIR="/var/lib/pasarguard/db-backup"
 EOF
 
 # ───────────── Install Backup Script ─────────────
 cat > /usr/local/bin/pasarguard-backup.sh <<'EOB'
 #!/bin/bash
-
 LOG_FILE="/var/log/pasarguard-backup.log"
 source /opt/pasarguard/backup-config.env
 
@@ -77,23 +82,16 @@ ZIP_FILE="/root/pasarguard-backup-$DATE.zip"
 echo "[$(date)] Starting backup..." >> "$LOG_FILE"
 
 MYSQL_CONTAINER=$(docker ps --format "{{.Names}}" | grep -i mysql | head -n1)
-
 if [ -z "$MYSQL_CONTAINER" ]; then
     echo "[$(date)] ERROR: MySQL container not found!" >> "$LOG_FILE"
     exit 1
 fi
 
-# ───────────── Dump Database ─────────────
+# Dump Database
 if [ -z "$DB_DISPLAY" ]; then
-    docker exec "$MYSQL_CONTAINER" mysqldump \
-    --no-tablespaces --column-statistics=0 \
-    -u"$DB_USER" -p"$DB_PASS" \
-    --all-databases > "$SQL_FILE" 2>> "$LOG_FILE"
+    docker exec "$MYSQL_CONTAINER" mysqldump --no-tablespaces --column-statistics=0 --user="$DB_USER" --password="$DB_PASS" --all-databases > "$SQL_FILE" 2>> "$LOG_FILE"
 else
-    docker exec "$MYSQL_CONTAINER" mysqldump \
-    --no-tablespaces --column-statistics=0 \
-    -u"$DB_USER" -p"$DB_PASS" \
-    "$DB_DISPLAY" > "$SQL_FILE" 2>> "$LOG_FILE"
+    docker exec "$MYSQL_CONTAINER" mysqldump --no-tablespaces --column-statistics=0 --user="$DB_USER" --password="$DB_PASS" "$DB_DISPLAY" > "$SQL_FILE" 2>> "$LOG_FILE"
 fi
 
 if [ ! -s "$SQL_FILE" ]; then
@@ -102,34 +100,36 @@ if [ ! -s "$SQL_FILE" ]; then
     exit 1
 fi
 
-# ───────────── Collect Files ─────────────
 FILES_TO_ZIP=("$SQL_FILE")
 
-while IFS= read -r path; do
+# Add selected paths
+for path in $BACKUP_PATHS; do
+    # Direct path exists
     if [ -e "$path" ]; then
         FILES_TO_ZIP+=("$path")
+        continue
+    fi
+    # Check /var/lib alternative
+    ALT_PATH=$(echo "$path" | sed 's|/opt/pasarguard|/var/lib/pasarguard|')
+    if [ -e "$ALT_PATH" ]; then
+        FILES_TO_ZIP+=("$ALT_PATH")
+        echo "[$(date)] INFO: Using alternative path $ALT_PATH" >> "$LOG_FILE"
     else
         echo "[$(date)] WARNING: $path not found" >> "$LOG_FILE"
     fi
-done <<< "$BACKUP_PATHS"
+done
 
-# ───────────── Zip ─────────────
 zip -r "$ZIP_FILE" "${FILES_TO_ZIP[@]}" >> "$LOG_FILE" 2>&1
-
 if [ ! -f "$ZIP_FILE" ]; then
     echo "[$(date)] ERROR: Zip failed!" >> "$LOG_FILE"
     exit 1
 fi
 
-# ───────────── Send Telegram ─────────────
+# Send to Telegram
 curl -s -X POST "https://api.telegram.org/bot$BOT_TOKEN/sendDocument" \
 -F chat_id="$CHAT_ID" \
 -F caption="📦 Pasarguard Backup - $DATE" \
 -F document=@"$ZIP_FILE" >> "$LOG_FILE"
-
-if [ $? -ne 0 ]; then
-    echo "[$(date)] ERROR: Telegram send failed!" >> "$LOG_FILE"
-fi
 
 rm -f "$SQL_FILE" "$ZIP_FILE"
 
@@ -139,11 +139,11 @@ EOB
 
 chmod +x /usr/local/bin/pasarguard-backup.sh
 
-# ───────────── Setup Cron (Clean old) ─────────────
+# ───────────── Setup Cron ─────────────
 (crontab -l 2>/dev/null | grep -v pasarguard-backup.sh; \
 echo "0 */$INTERVAL * * * /usr/local/bin/pasarguard-backup.sh") | crontab -
 
-# ───────────── First Run ─────────────
+# ───────────── First Backup ─────────────
 /usr/local/bin/pasarguard-backup.sh
 
-whiptail --msgbox "✅ Installation Complete!\n\nBackup runs every $INTERVAL hour(s).\nFirst backup sent to Telegram." 10 60
+whiptail --msgbox "✅ Installation Complete!\n\nBackup runs every $INTERVAL hour(s).\nFirst backup sent to Telegram." 12 60
