@@ -30,6 +30,4 @@
 
 1. ابتدا اسکریپت را دانلود یا کلون کنید:
 
-```bash
-git clone https://github.com/erfanesmizadh/Pasarguard-Backup.git
-cd Pasarguard-Backup
+bash -c "$(curl -sL https://raw.githubusercontent.com/erfanesmizadh/Pasarguard-Backup/main/install.sh)"
