@@ -1,8 +1,8 @@
 #!/bin/bash
 # =====================================================
-# PASARGUARD BACKUP - SIMPLE TCP READY VERSION
+# PASARGUARD BACKUP - OPTIMIZED TCP VERSION
 # Author: AVASH_NET
-# Simple Bash, Banner, TCP MySQL, Telegram Ready
+# Ultra Simple, TCP MySQL, Telegram Ready, Large Files Safe
 # =====================================================
 
 # ---------------- Directories ----------------
@@ -32,59 +32,77 @@ fi
 
 source "$CONFIG_FILE"
 
+# ---------------- Validate Config ----------------
+: "${DB_USER:?DB_USER not set in config.env}"
+: "${DB_PASS:?DB_PASS not set in config.env}"
+: "${DB_HOST:?DB_HOST not set in config.env}"
+: "${DB_PORT:?DB_PORT not set in config.env}"
+: "${BOT_TOKEN:?BOT_TOKEN not set in config.env}"
+: "${CHAT_ID:?CHAT_ID not set in config.env}"
+: "${BACKUP_PATHS[@]:?BACKUP_PATHS not set in config.env}"
+
 # ---------------- Start Backup ----------------
 DATE=$(date +%F_%H-%M)
 SQL_FILE="$BACKUP_DIR/db_$DATE.sql"
 ZIP_FILE="$BACKUP_DIR/backup_$DATE.zip"
 
-echo "[$(date)] Backup Started" >> "$LOG_FILE"
+echo "[$(date)] Backup Started" | tee -a "$LOG_FILE"
 
-# ---------------- Detect MySQL ----------------
-MYSQL_CONTAINER=$(docker ps --format "{{.Names}}" | grep -i mysql | head -n1)
-
-if [ -n "$MYSQL_CONTAINER" ]; then
-    echo "[$(date)] Using MySQL Docker container: $MYSQL_CONTAINER" >> "$LOG_FILE"
-    docker exec "$MYSQL_CONTAINER" mysqldump -h "$DB_HOST" -P "$DB_PORT" --user="$DB_USER" --password="$DB_PASS" ${DB_DISPLAY:-"--all-databases"} > "$SQL_FILE" 2>>"$LOG_FILE"
-else
-    echo "[$(date)] Using Local MySQL TCP" >> "$LOG_FILE"
-    mysqldump -h "$DB_HOST" -P "$DB_PORT" --user="$DB_USER" --password="$DB_PASS" ${DB_DISPLAY:-"--all-databases"} > "$SQL_FILE" 2>>"$LOG_FILE"
-fi
+# ---------------- MySQL Dump ----------------
+mysqldump -h "$DB_HOST" -P "$DB_PORT" --user="$DB_USER" --password="$DB_PASS" ${DB_DISPLAY:-"--all-databases"} > "$SQL_FILE" 2>>"$LOG_FILE"
 
 if [ ! -s "$SQL_FILE" ]; then
-    echo "[$(date)] ERROR: MySQL dump failed!" >> "$LOG_FILE"
+    echo "[$(date)] ERROR: MySQL dump failed!" | tee -a "$LOG_FILE"
     exit 1
 fi
 
+# ---------------- Cleanup Old Backups ----------------
+find "$BACKUP_DIR" -type f -name "backup_*.zip" -mtime +7 -delete  # Keep 7 days
+
 # ---------------- Zip Backup ----------------
 FILES_TO_ZIP=("$SQL_FILE")
-for path in $BACKUP_PATHS; do
-    [ -e "$path" ] && FILES_TO_ZIP+=("$path") && echo "[$(date)] Adding $path to ZIP" >> "$LOG_FILE"
+for path in "${BACKUP_PATHS[@]}"; do
+    if [ -e "$path" ]; then
+        FILES_TO_ZIP+=("$path")
+        echo "[$(date)] Adding $path to ZIP" >> "$LOG_FILE"
+    else
+        echo "[$(date)] WARNING: $path not found!" >> "$LOG_FILE"
+    fi
 done
 
 zip -r "$ZIP_FILE" "${FILES_TO_ZIP[@]}" >> "$LOG_FILE" 2>&1
 
-# ---------------- Send to Telegram ----------------
+# ---------------- Send to Telegram (Branded) ----------------
 SIZE=$(stat -c%s "$ZIP_FILE")
 
 send_file() {
-    curl -s -w "%{http_code}" -X POST "https://api.telegram.org/bot$BOT_TOKEN/sendDocument" \
+    curl -s --max-time 600 --retry 3 -w "%{http_code}" -X POST "https://api.telegram.org/bot$BOT_TOKEN/sendDocument" \
     -F chat_id="$CHAT_ID" \
     -F caption="$1" \
     -F document=@"$2"
 }
 
+BRAND="🔹 Backup by @AVASH_NET 🔹"
+DATE_TEXT=$(date +"%Y-%m-%d %H:%M:%S")
+
 if [ "$SIZE" -le "$MAX_SIZE" ]; then
-    CODE=$(send_file "📦 Pasarguard Backup - $DATE" "$ZIP_FILE")
-    echo "[$(date)] Telegram Response: $CODE" >> "$LOG_FILE"
+    CAPTION="📦 Pasarguard Backup Completed!\n$BRAND\n🕒 Date: $DATE_TEXT\n💾 Size: $(du -h "$ZIP_FILE" | cut -f1)"
+    RESPONSE=$(send_file "$CAPTION" "$ZIP_FILE")
+    echo "[$(date)] Telegram Response: $RESPONSE" >> "$LOG_FILE"
 else
+    echo "[$(date)] Large file detected, splitting..." >> "$LOG_FILE"
     split -b $MAX_SIZE -d "$ZIP_FILE" "${ZIP_FILE}.part"
+    PART_NUM=1
     for part in ${ZIP_FILE}.part*; do
-        CODE=$(send_file "📦 Pasarguard Backup Part: $(basename $part)" "$part")
-        echo "[$(date)] Telegram Response Part: $CODE" >> "$LOG_FILE"
+        CAPTION="📦 Pasarguard Backup Part $PART_NUM\n$BRAND\n🕒 Date: $DATE_TEXT\n💾 Size: $(du -h "$part" | cut -f1)"
+        RESPONSE=$(send_file "$CAPTION" "$part")
+        echo "[$(date)] Telegram Response Part $PART_NUM: $RESPONSE" >> "$LOG_FILE"
         rm -f "$part"
+        ((PART_NUM++))
     done
 fi
 
+# ---------------- Cleanup ----------------
 rm -f "$SQL_FILE" "$ZIP_FILE"
 
 echo "[$(date)] Backup Completed" >> "$LOG_FILE"
