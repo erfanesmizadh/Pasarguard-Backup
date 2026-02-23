@@ -1,8 +1,8 @@
 #!/bin/bash
 # =====================================================
-# PASARGUARD BACKUP & MANAGEMENT - FINAL STABLE
+# PASARGUARD BACKUP & MANAGEMENT - STABLE RELEASE
 # Author: AVASH_NET
-# MySQL TCP • Telegram • Cron • Full Remove • Secure
+# MySQL TCP • Telegram • Cron • Secure Config
 # =====================================================
 
 # ---------------- Root Check ----------------
@@ -12,8 +12,13 @@ if [[ $EUID -ne 0 ]]; then
 fi
 
 # ---------------- Colors ----------------
-RED="\e[31m"; GREEN="\e[32m"; YELLOW="\e[33m"
-BLUE="\e[34m"; MAGENTA="\e[35m"; CYAN="\e[36m"; RESET="\e[0m"
+RED="\e[31m"
+GREEN="\e[32m"
+YELLOW="\e[33m"
+BLUE="\e[34m"
+MAGENTA="\e[35m"
+CYAN="\e[36m"
+RESET="\e[0m"
 
 # ---------------- Paths ----------------
 INSTALL_DIR="/opt/pasarguard-backup"
@@ -23,11 +28,12 @@ LOG_FILE="/var/log/pg-backup.log"
 CRON_FILE="/etc/cron.d/pasarguard-backup"
 MAX_SIZE=$((45*1024*1024))
 
-mkdir -p "$INSTALL_DIR" "$BACKUP_DIR"
+mkdir -p "$INSTALL_DIR"
+mkdir -p "$BACKUP_DIR"
 touch "$LOG_FILE"
 chmod 600 "$LOG_FILE"
 
-# ---------------- Install Requirements ----------------
+# ---------------- Install Dependencies ----------------
 install_deps() {
 apt update -y >/dev/null 2>&1
 apt install -y mariadb-client zip curl nano cron >/dev/null 2>&1
@@ -37,13 +43,9 @@ apt install -y mariadb-client zip curl nano cron >/dev/null 2>&1
 setup_config() {
 
 clear
-echo -e "${CYAN}"
-echo "================================================="
-echo "        🔧 PASARGUARD BACKUP CONFIG SETUP"
-echo "================================================="
-echo -e "${RESET}"
-
-mkdir -p "$INSTALL_DIR"
+echo -e "${CYAN}==============================================="
+echo "      PASARGUARD BACKUP CONFIGURATION"
+echo -e "===============================================${RESET}"
 
 read -p "Database Host (default 127.0.0.1): " DB_HOST
 DB_HOST=${DB_HOST:-127.0.0.1}
@@ -56,7 +58,7 @@ read -p "Database Username: " DB_USER
 read -s -p "Database Password: " DB_PASS
 echo
 
-read -p "Database Name (or type ALL): " DB_NAME
+read -p "Database Name (or ALL): " DB_NAME
 if [[ "$DB_NAME" == "ALL" || "$DB_NAME" == "all" ]]; then
     DB_DISPLAY="--all-databases"
 else
@@ -66,7 +68,7 @@ fi
 read -p "Telegram Bot Token: " BOT_TOKEN
 read -p "Telegram Numeric Chat ID: " CHAT_ID
 
-read -p "Paths to Backup (space separated, default: /opt/pasarguard /var/www/html): " BACKUP_PATHS
+read -p "Paths to Backup (default: /opt/pasarguard /var/www/html): " BACKUP_PATHS
 BACKUP_PATHS=${BACKUP_PATHS:-"/opt/pasarguard /var/www/html"}
 
 cat > "$CONFIG_FILE" <<EOF
@@ -82,15 +84,15 @@ EOF
 
 chmod 600 "$CONFIG_FILE"
 
-echo -e "${GREEN}Config saved successfully ✅${RESET}"
+echo -e "${GREEN}Configuration saved successfully ✅${RESET}"
 sleep 2
 }
 
 # ---------------- Load Config ----------------
 load_config() {
 if [ ! -f "$CONFIG_FILE" ]; then
-echo -e "${RED}Config not found! Run Setup first.${RESET}"
-return 1
+  echo -e "${RED}Config not found. Run setup first.${RESET}"
+  return 1
 fi
 source "$CONFIG_FILE"
 }
@@ -100,10 +102,11 @@ test_mysql() {
 load_config || return
 mysql -h "$DB_HOST" -P "$DB_PORT" -u"$DB_USER" -p"$DB_PASS" -e "exit" >/dev/null 2>&1
 if [ $? -eq 0 ]; then
-echo -e "${GREEN}MySQL Connection OK ✅${RESET}"
+  echo -e "${GREEN}MySQL Connection OK ✅${RESET}"
 else
-echo -e "${RED}MySQL Connection Failed ❌${RESET}"
+  echo -e "${RED}MySQL Connection Failed ❌${RESET}"
 fi
+sleep 2
 }
 
 # ---------------- Test Telegram ----------------
@@ -111,8 +114,9 @@ test_telegram() {
 load_config || return
 curl -s -X POST "https://api.telegram.org/bot$BOT_TOKEN/sendMessage" \
 -d chat_id="$CHAT_ID" \
--d text="✅ Pasarguard Backup Test Message" >/dev/null
+-d text="Pasarguard Backup Test Message ✅" >/dev/null
 echo -e "${GREEN}Test message sent (check Telegram)${RESET}"
+sleep 2
 }
 
 # ---------------- Run Backup ----------------
@@ -124,16 +128,15 @@ DATE=$(date +%F_%H-%M)
 SQL_FILE="$BACKUP_DIR/db_$DATE.sql"
 ZIP_FILE="$BACKUP_DIR/backup_$DATE.zip"
 
-echo "[START] $DATE" >> "$LOG_FILE"
-
 mysqldump -h "$DB_HOST" -P "$DB_PORT" -u"$DB_USER" -p"$DB_PASS" $DB_DISPLAY > "$SQL_FILE" 2>>"$LOG_FILE"
 
 if [ ! -s "$SQL_FILE" ]; then
-echo -e "${RED}Database dump failed!${RESET}"
-return
+  echo -e "${RED}Database dump failed!${RESET}"
+  sleep 2
+  return
 fi
 
-zip -r "$ZIP_FILE" "$SQL_FILE" $BACKUP_PATHS >> "$LOG_FILE" 2>&1
+zip -r "$ZIP_FILE" "$SQL_FILE" $BACKUP_PATHS >/dev/null 2>&1
 
 SIZE=$(stat -c%s "$ZIP_FILE")
 
@@ -144,18 +147,18 @@ curl -s -X POST "https://api.telegram.org/bot$BOT_TOKEN/sendDocument" \
 }
 
 if [ "$SIZE" -le "$MAX_SIZE" ]; then
-send_file "$ZIP_FILE"
+  send_file "$ZIP_FILE"
 else
-split -b $MAX_SIZE "$ZIP_FILE" "${ZIP_FILE}.part"
-for part in ${ZIP_FILE}.part*; do
-send_file "$part"
-rm -f "$part"
-done
+  split -b $MAX_SIZE "$ZIP_FILE" "${ZIP_FILE}.part"
+  for part in ${ZIP_FILE}.part*; do
+    send_file "$part"
+    rm -f "$part"
+  done
 fi
 
 rm -f "$SQL_FILE" "$ZIP_FILE"
-echo "[DONE] $DATE" >> "$LOG_FILE"
 echo -e "${GREEN}Backup Completed Successfully ✅${RESET}"
+sleep 2
 }
 
 # ---------------- Setup Cron ----------------
@@ -163,24 +166,26 @@ setup_cron() {
 echo "0 3 * * * root bash $0 --auto" > "$CRON_FILE"
 systemctl restart cron
 echo -e "${GREEN}Daily backup scheduled at 03:00 AM ✅${RESET}"
+sleep 2
 }
 
 # ---------------- Remove Backup Files ----------------
 remove_files() {
 rm -rf "$BACKUP_DIR"/*
 echo -e "${GREEN}All backup files removed.${RESET}"
+sleep 2
 }
 
 # ---------------- Uninstall ----------------
 uninstall_all() {
-echo -e "${RED}This will completely remove Backup System!${RESET}"
+echo -e "${RED}This will remove Backup System completely!${RESET}"
 read -p "Type YES to confirm: " confirm
 if [ "$confirm" == "YES" ]; then
 rm -rf "$INSTALL_DIR"
 rm -rf "$BACKUP_DIR"
 rm -f "$LOG_FILE"
 rm -f "$CRON_FILE"
-echo -e "${GREEN}System Removed Completely ✅${RESET}"
+echo -e "${GREEN}System Removed Successfully ✅${RESET}"
 exit 0
 fi
 }
@@ -191,27 +196,24 @@ run_backup
 exit 0
 fi
 
-# ---------------- Start ----------------
 install_deps
 
 # ---------------- Main Menu ----------------
 while true; do
 clear
-echo -e "${MAGENTA}"
-echo "================================================="
-echo "          🔹 PASARGUARD BACKUP PANEL 🔹"
-echo "================================================="
-echo -e "${RESET}"
-echo -e "${YELLOW}1)${RESET} Setup / Configure Backup"
-echo -e "${YELLOW}2)${RESET} Test MySQL Connection"
+echo -e "${MAGENTA}==============================================="
+echo "        PASARGUARD BACKUP CONTROL PANEL"
+echo -e "===============================================${RESET}"
+echo -e "${YELLOW}1)${RESET} Setup / Configure"
+echo -e "${YELLOW}2)${RESET} Test MySQL"
 echo -e "${YELLOW}3)${RESET} Test Telegram"
 echo -e "${YELLOW}4)${RESET} Run Backup Now"
-echo -e "${YELLOW}5)${RESET} Setup Daily Auto Backup (03:00 AM)"
+echo -e "${YELLOW}5)${RESET} Setup Daily Backup (03:00)"
 echo -e "${YELLOW}6)${RESET} Show Log"
-echo -e "${YELLOW}7)${RESET} Remove All Backup Files"
-echo -e "${YELLOW}8)${RESET} Uninstall Backup System"
+echo -e "${YELLOW}7)${RESET} Remove Backup Files"
+echo -e "${YELLOW}8)${RESET} Uninstall System"
 echo -e "${YELLOW}0)${RESET} Exit"
-echo "-------------------------------------------------"
+echo "-----------------------------------------------"
 read -p "Select option: " opt
 
 case $opt in
