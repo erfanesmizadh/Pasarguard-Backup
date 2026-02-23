@@ -1,9 +1,9 @@
 #!/bin/bash
 # =====================================================
-# PASARGUARD BACKUP - OPTIMIZED TCP VERSION
+# PASARGUARD BACKUP - FULL OPTIMIZED TCP VERSION
 # Author: AVASH_NET
-# Ultra Simple, TCP MySQL, Telegram Ready, Large Files Safe
-# Branding Included
+# Simple Bash, TCP MySQL, Telegram Ready, Large Files Safe
+# Supports Custom Files
 # =====================================================
 
 # ---------------- Directories ----------------
@@ -30,7 +30,6 @@ if [ ! -f "$CONFIG_FILE" ]; then
     echo "[ERROR] Config file not found! Create $CONFIG_FILE first."
     exit 1
 fi
-
 source "$CONFIG_FILE"
 
 # ---------------- Validate Config ----------------
@@ -43,14 +42,22 @@ source "$CONFIG_FILE"
 : "${BACKUP_PATHS[@]:?BACKUP_PATHS not set in config.env}"
 
 # ---------------- Start Backup ----------------
-DATE=$(date +"%Y-%m-%d_%H-%M")
+DATE=$(date +%F_%H-%M)
 SQL_FILE="$BACKUP_DIR/db_$DATE.sql"
 ZIP_FILE="$BACKUP_DIR/backup_$DATE.zip"
 
 echo "[$(date)] Backup Started" | tee -a "$LOG_FILE"
 
 # ---------------- MySQL Dump ----------------
-mysqldump -h "$DB_HOST" -P "$DB_PORT" --user="$DB_USER" --password="$DB_PASS" ${DB_DISPLAY:-"--all-databases"} > "$SQL_FILE" 2>>"$LOG_FILE"
+MYSQL_CONTAINER=$(docker ps --format "{{.Names}}" | grep -i mysql | head -n1)
+
+if [ -n "$MYSQL_CONTAINER" ]; then
+    echo "[$(date)] Using MySQL Docker container: $MYSQL_CONTAINER" >> "$LOG_FILE"
+    docker exec "$MYSQL_CONTAINER" mysqldump -h "$DB_HOST" -P "$DB_PORT" --user="$DB_USER" --password="$DB_PASS" ${DB_DISPLAY:-"--all-databases"} > "$SQL_FILE" 2>>"$LOG_FILE"
+else
+    echo "[$(date)] Using Local MySQL TCP" >> "$LOG_FILE"
+    mysqldump -h "$DB_HOST" -P "$DB_PORT" --user="$DB_USER" --password="$DB_PASS" ${DB_DISPLAY:-"--all-databases"} > "$SQL_FILE" 2>>"$LOG_FILE"
+fi
 
 if [ ! -s "$SQL_FILE" ]; then
     echo "[$(date)] ERROR: MySQL dump failed!" | tee -a "$LOG_FILE"
@@ -60,24 +67,38 @@ fi
 # ---------------- Cleanup Old Backups ----------------
 find "$BACKUP_DIR" -type f -name "backup_*.zip" -mtime +7 -delete  # Keep 7 days
 
-# ---------------- Zip Backup ----------------
-FILES_TO_ZIP=("$SQL_FILE")
-for path in "${BACKUP_PATHS[@]}"; do
-    if [ -e "$path" ]; then
-        FILES_TO_ZIP+=("$path")
-        echo "[$(date)] Adding $path to ZIP" >> "$LOG_FILE"
+# ---------------- Custom Files Copy ----------------
+CUSTOM_PATHS=(
+"/مسیر/فایل/یا/پوشه/اول"
+"/مسیر/فایل/یا/پوشه/دوم"
+)
+CUSTOM_DIR="$BACKUP_DIR/custom-files"
+mkdir -p "$CUSTOM_DIR"
+
+for item in "${CUSTOM_PATHS[@]}"; do
+    if [ -e "$item" ]; then
+        cp -r "$item" "$CUSTOM_DIR/"
+        echo "[$(date)] INFO: Copied $item to $CUSTOM_DIR" >> "$LOG_FILE"
     else
-        echo "[$(date)] WARNING: $path not found!" >> "$LOG_FILE"
+        echo "[$(date)] WARNING: $item not found!" >> "$LOG_FILE"
     fi
 done
 
+# ---------------- Zip Backup ----------------
+FILES_TO_ZIP=("$SQL_FILE")
+for path in "${BACKUP_PATHS[@]}"; do
+    [ -e "$path" ] && FILES_TO_ZIP+=("$path") && echo "[$(date)] Adding $path to ZIP" >> "$LOG_FILE"
+done
+
+# Include custom files
+if [ -d "$CUSTOM_DIR" ]; then
+    FILES_TO_ZIP+=("$CUSTOM_DIR")
+fi
+
 zip -r "$ZIP_FILE" "${FILES_TO_ZIP[@]}" >> "$LOG_FILE" 2>&1
 
-# ---------------- Send to Telegram (Branded) ----------------
+# ---------------- Send to Telegram ----------------
 SIZE=$(stat -c%s "$ZIP_FILE")
-BRAND="🔹 Backup by @AVASH_NET 🔹"
-DATE_TEXT=$(date +"%Y-%m-%d %H:%M:%S")
-FILE_SIZE_HUMAN=$(du -h "$ZIP_FILE" | cut -f1)
 
 send_file() {
     curl -s --max-time 600 --retry 3 -w "%{http_code}" -X POST "https://api.telegram.org/bot$BOT_TOKEN/sendDocument" \
@@ -86,21 +107,21 @@ send_file() {
     -F document=@"$2"
 }
 
+TELEGRAM_CAPTION="📦 Pasarguard Backup - $DATE  
+Brand: @AVASH_NET  
+✅ All data & custom files included"
+
 if [ "$SIZE" -le "$MAX_SIZE" ]; then
-    CAPTION="📦 *Pasarguard Backup Completed*\n$BRAND\n🕒 Date: $DATE_TEXT\n💾 Size: $FILE_SIZE_HUMAN\n📁 Total Files: ${#FILES_TO_ZIP[@]}"
-    RESPONSE=$(send_file "$CAPTION" "$ZIP_FILE")
+    RESPONSE=$(send_file "$TELEGRAM_CAPTION" "$ZIP_FILE")
     echo "[$(date)] Telegram Response: $RESPONSE" >> "$LOG_FILE"
 else
     echo "[$(date)] Large file detected, splitting..." >> "$LOG_FILE"
     split -b $MAX_SIZE -d "$ZIP_FILE" "${ZIP_FILE}.part"
-    PART_NUM=1
     for part in ${ZIP_FILE}.part*; do
-        PART_SIZE=$(du -h "$part" | cut -f1)
-        CAPTION="📦 *Pasarguard Backup Part $PART_NUM*\n$BRAND\n🕒 Date: $DATE_TEXT\n💾 Size: $PART_SIZE\n📁 Files in this part: $(ls "${part}"* | wc -l)"
-        RESPONSE=$(send_file "$CAPTION" "$part")
-        echo "[$(date)] Telegram Response Part $PART_NUM: $RESPONSE" >> "$LOG_FILE"
+        RESPONSE=$(send_file "📦 Pasarguard Backup Part: $(basename $part)  
+Brand: @AVASH_NET" "$part")
+        echo "[$(date)] Telegram Response Part: $RESPONSE" >> "$LOG_FILE"
         rm -f "$part"
-        ((PART_NUM++))
     done
 fi
 
@@ -110,3 +131,4 @@ rm -f "$SQL_FILE" "$ZIP_FILE"
 echo "[$(date)] Backup Completed" >> "$LOG_FILE"
 echo "==============================================="
 echo "Backup Finished ✅"
+echo "Brand: @AVASH_NET"
