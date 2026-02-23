@@ -3,6 +3,7 @@
 # PASARGUARD BACKUP - OPTIMIZED TCP VERSION
 # Author: AVASH_NET
 # Ultra Simple, TCP MySQL, Telegram Ready, Large Files Safe
+# Branding Included
 # =====================================================
 
 # ---------------- Directories ----------------
@@ -42,7 +43,7 @@ source "$CONFIG_FILE"
 : "${BACKUP_PATHS[@]:?BACKUP_PATHS not set in config.env}"
 
 # ---------------- Start Backup ----------------
-DATE=$(date +%F_%H-%M)
+DATE=$(date +"%Y-%m-%d_%H-%M")
 SQL_FILE="$BACKUP_DIR/db_$DATE.sql"
 ZIP_FILE="$BACKUP_DIR/backup_$DATE.zip"
 
@@ -74,6 +75,9 @@ zip -r "$ZIP_FILE" "${FILES_TO_ZIP[@]}" >> "$LOG_FILE" 2>&1
 
 # ---------------- Send to Telegram (Branded) ----------------
 SIZE=$(stat -c%s "$ZIP_FILE")
+BRAND="🔹 Backup by @AVASH_NET 🔹"
+DATE_TEXT=$(date +"%Y-%m-%d %H:%M:%S")
+FILE_SIZE_HUMAN=$(du -h "$ZIP_FILE" | cut -f1)
 
 send_file() {
     curl -s --max-time 600 --retry 3 -w "%{http_code}" -X POST "https://api.telegram.org/bot$BOT_TOKEN/sendDocument" \
@@ -82,11 +86,8 @@ send_file() {
     -F document=@"$2"
 }
 
-BRAND="🔹 Backup by @AVASH_NET 🔹"
-DATE_TEXT=$(date +"%Y-%m-%d %H:%M:%S")
-
 if [ "$SIZE" -le "$MAX_SIZE" ]; then
-    CAPTION="📦 Pasarguard Backup Completed!\n$BRAND\n🕒 Date: $DATE_TEXT\n💾 Size: $(du -h "$ZIP_FILE" | cut -f1)"
+    CAPTION="📦 *Pasarguard Backup Completed*\n$BRAND\n🕒 Date: $DATE_TEXT\n💾 Size: $FILE_SIZE_HUMAN\n📁 Total Files: ${#FILES_TO_ZIP[@]}"
     RESPONSE=$(send_file "$CAPTION" "$ZIP_FILE")
     echo "[$(date)] Telegram Response: $RESPONSE" >> "$LOG_FILE"
 else
@@ -94,7 +95,8 @@ else
     split -b $MAX_SIZE -d "$ZIP_FILE" "${ZIP_FILE}.part"
     PART_NUM=1
     for part in ${ZIP_FILE}.part*; do
-        CAPTION="📦 Pasarguard Backup Part $PART_NUM\n$BRAND\n🕒 Date: $DATE_TEXT\n💾 Size: $(du -h "$part" | cut -f1)"
+        PART_SIZE=$(du -h "$part" | cut -f1)
+        CAPTION="📦 *Pasarguard Backup Part $PART_NUM*\n$BRAND\n🕒 Date: $DATE_TEXT\n💾 Size: $PART_SIZE\n📁 Files in this part: $(ls "${part}"* | wc -l)"
         RESPONSE=$(send_file "$CAPTION" "$part")
         echo "[$(date)] Telegram Response Part $PART_NUM: $RESPONSE" >> "$LOG_FILE"
         rm -f "$part"
